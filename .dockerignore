@@ -1,0 +1,14 @@
+node_modules
+TelaChamadosBack/node_modules
+tela_chamados_front/node_modules
+tela_chamados_front/.next
+.puppeteer-profiles
+TelaChamadosBack/.puppeteer-profiles
+.agents
+.codex
+.git
+.gitignore
+npm-debug.log*
+.env
+.env.*
+!.env.docker.example

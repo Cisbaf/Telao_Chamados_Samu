@@ -1,0 +1,14 @@
+node_modules
+next-scrap/node_modules
+next-scrap/.next
+.puppeteer-profiles
+.agents
+.codex
+.git
+.gitignore
+npm-debug.log*
+Dockerfile*
+docker-compose*.yml
+.env
+.env.*
+!.env.docker.example
