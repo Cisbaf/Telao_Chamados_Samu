@@ -7,7 +7,7 @@ function positiveNumber(value: string | undefined, fallback: number) {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-const SCRAP_CACHE_TTL_MS = positiveNumber(process.env.SCRAP_CACHE_TTL_MS, 10000);
+const SCRAP_CACHE_TTL_MS = positiveNumber(process.env.SCRAP_CACHE_TTL_MS, 30000);
 
 let cachedData: ScrapData | null = null;
 let cachedAt = 0;
@@ -21,6 +21,13 @@ export async function GET() {
             return NextResponse.json(cachedData, {
                 status: 200,
                 headers: { 'x-scrap-cache': 'hit' },
+            });
+        }
+
+        if (scrapeInFlight && cachedData) {
+            return NextResponse.json(cachedData, {
+                status: 200,
+                headers: { 'x-scrap-cache': 'stale-while-refresh' },
             });
         }
 

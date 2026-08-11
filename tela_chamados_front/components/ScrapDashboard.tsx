@@ -15,7 +15,7 @@ function positiveNumber(value: string | undefined, fallback: number) {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-const SCRAP_REFRESH_MS = positiveNumber(process.env.NEXT_PUBLIC_SCRAP_REFRESH_MS, 10000);
+const SCRAP_REFRESH_MS = positiveNumber(process.env.NEXT_PUBLIC_SCRAP_REFRESH_MS, 30000);
 
 async function tocarAlertaAVC() {
     const AudioContextClass = window.AudioContext ||
