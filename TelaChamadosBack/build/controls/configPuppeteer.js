@@ -82,7 +82,7 @@ async function cleanupProfileDir(userDataDir) {
         .catch(() => undefined);
 }
 async function cleanupOldProfiles(profileRoot) {
-    const maxAgeMs = positiveNumber('PUPPETEER_PROFILE_MAX_AGE_MS', 6 * 60 * 60 * 1000);
+    const maxAgeMs = positiveNumber('PUPPETEER_PROFILE_MAX_AGE_MS', 30 * 60 * 1000);
     const now = Date.now();
     const entries = await fs_1.default.promises.readdir(profileRoot, { withFileTypes: true }).catch(() => []);
     await Promise.all(entries
@@ -98,7 +98,6 @@ async function cleanupOldProfiles(profileRoot) {
 
 async function configPuppeteer() {
     try {
-        //console.log("Configurando...");
         var browser;
         
         const profileRoot = process.env.PUPPETEER_TMP_DIR ||
@@ -109,6 +108,7 @@ async function configPuppeteer() {
         const userDataDir = process.platform === "win32" && !config_1.varsEnviroment.production ?
             "C:\\pupperteer-profile" :
             node_path_1.default.join(profileRoot, defaultProfileName);
+        let activeUserDataDir = userDataDir;
 
         const chromePath = findChromeExecutable();
         const firefoxPath = findFirefoxExecutable();
@@ -116,17 +116,11 @@ async function configPuppeteer() {
         const debugPort = envNumber('PUPPETEER_REMOTE_DEBUGGING_PORT');
         const browserPreference = envString('PUPPETEER_BROWSER', 'chrome').toLowerCase();
         const launchOptions = {
-            headless: !envFlag('PUPPETEER_HEADFUL'),
+            headless: envFlag('PUPPETEER_HEADFUL') ? false : 'shell',
             userDataDir,
             devtools: envFlag('PUPPETEER_DEVTOOLS'),
             dumpio: envFlag('PUPPETEER_DUMPIO'),
             slowMo: envNumber('PUPPETEER_SLOWMO_MS'),
-            env: {
-                ...process.env,
-                TMPDIR: profileRoot,
-                TMP: profileRoot,
-                TEMP: profileRoot,
-            },
             args: [
                 '--disable-background-networking',
                 '--disable-background-timer-throttling',
@@ -141,6 +135,7 @@ async function configPuppeteer() {
                 '--disable-extensions',
                 '--disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter,OptimizationHints',
                 '--disable-gpu',
+                '--disable-software-rasterizer',
                 '--disable-hang-monitor',
                 '--disable-ipc-flooding-protection',
                 '--disable-popup-blocking',
@@ -182,16 +177,23 @@ async function configPuppeteer() {
             if (!firefoxPath) {
                 throw new Error('Firefox nao encontrado para PUPPETEER_BROWSER=firefox.');
             }
+            const firefoxProfileDir = node_path_1.default.join(profileRoot, defaultProfileName + "-firefox");
+            activeUserDataDir = firefoxProfileDir;
             console.error(`Iniciando Firefox por preferencia: ${firefoxPath}`);
             browser = await puppeteer_1.default.launch({
                 product: 'firefox',
                 executablePath: firefoxPath,
                 headless: !envFlag('PUPPETEER_HEADFUL'),
-                userDataDir: node_path_1.default.join(profileRoot, defaultProfileName + "-firefox"),
+                userDataDir: firefoxProfileDir,
                 dumpio: envFlag('PUPPETEER_DUMPIO'),
                 args: envFlag('PUPPETEER_HEADFUL') ? [] : ['-headless'],
             });
             console.error(`Puppeteer iniciado. WebSocket endpoint: ${browser.wsEndpoint()}`);
+            browser.on("disconnected", () => {
+                setTimeout(() => {
+                    cleanupProfileDir(activeUserDataDir);
+                }, 1000);
+            });
             global.__BROWSER__ = browser;
             return browser;
         }
@@ -203,7 +205,15 @@ async function configPuppeteer() {
             await cleanupProfileDir(userDataDir);
             const fallbackOptions = {
                 ...launchOptions,
-                args: ['--disable-dev-shm-usage', '--disable-crash-reporter', '--disable-crashpad', '--disable-breakpad', '--no-sandbox', '--disable-setuid-sandbox'],
+                args: [
+                    '--disable-dev-shm-usage',
+                    '--disable-crash-reporter',
+                    '--disable-crashpad',
+                    '--disable-breakpad',
+                    '--disable-software-rasterizer',
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox'
+                ],
                 dumpio: true,
             };
             if (debugPort) {
@@ -218,6 +228,7 @@ async function configPuppeteer() {
                 await cleanupProfileDir(userDataDir);
                 if (firefoxPath) {
                     const firefoxProfileDir = node_path_1.default.join(profileRoot, defaultProfileName + "-firefox");
+                    activeUserDataDir = firefoxProfileDir;
                     console.error("Falha ao iniciar Chromium com flags minimas:", fallbackErr);
                     console.error(`Tentando iniciar Firefox como fallback: ${firefoxPath}`);
                     try {
@@ -243,8 +254,7 @@ async function configPuppeteer() {
         console.error(`Puppeteer iniciado. WebSocket endpoint: ${browser.wsEndpoint()}`);
         browser.on("disconnected", () => {
             setTimeout(() => {
-                fs_1.default.promises.rm(userDataDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
-                    .catch(() => undefined);
+                cleanupProfileDir(activeUserDataDir);
             }, 1000);
         });
         global.__BROWSER__ = browser;

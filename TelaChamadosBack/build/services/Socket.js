@@ -13,7 +13,7 @@ function positiveNumber(value, fallback) {
     const parsed = Number(value);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
-const SCRAP_SOCKET_INTERVAL_MS = positiveNumber(process.env.SCRAP_SOCKET_INTERVAL_MS, 10000);
+const SCRAP_SOCKET_INTERVAL_MS = positiveNumber(process.env.SCRAP_SOCKET_INTERVAL_MS, 30000);
 
 class SocketServer {
     constructor(server) {
@@ -23,7 +23,6 @@ class SocketServer {
             const intervalId = setInterval(() => {
                 if (this.Relatorio)
                     this.io.emit("NovaEstatistica", this.Relatorio);
-                this.Relatorio = null;
             }, 1000);
             socket.on("disconnect", () => clearInterval(intervalId));
             if (!SocketServer.update) {
@@ -33,18 +32,34 @@ class SocketServer {
         });
     }
 async PegarEstatistica(browser) {
-        let page = await browser.newPage();
-        await (0, ObterCookie_1.fazerLogin)(page);
+        let page = null;
+        const delay = (ms) => new Promise(res => setTimeout(res, ms));
+        const abrirPaginaLogada = async () => {
+            if (page) {
+                await page.close().catch(() => undefined);
+            }
+            page = await browser.newPage();
+            await (0, ObterCookie_1.fazerLogin)(page);
+            return page;
+        };
+        await abrirPaginaLogada();
         while (true) {
+            const cycleStartedAt = Date.now();
             try {
                 await page.goto(config_1.varsEnviroment.PageUrl, { waitUntil: 'domcontentloaded', timeout: 60000 })
                 this.Relatorio = await GetStatistic_1.GetStatistic.pegarDados(page);
-                await new Promise(res => setTimeout(res, SCRAP_SOCKET_INTERVAL_MS));
+                console.error(`Scrap Socket atualizado em ${new Date().toISOString()}`);
+                await delay(Math.max(0, SCRAP_SOCKET_INTERVAL_MS - (Date.now() - cycleStartedAt)));
             } catch (err) {
-              console.error("erro aqui")
-              if (page) await page.close();
-            console.error("O método PegarEstatistica Deu erro... " + err);
-            throw new Error(err);
+                console.error("O método PegarEstatistica deu erro e vai tentar novamente: " + err);
+                await delay(Math.min(SCRAP_SOCKET_INTERVAL_MS, 5000));
+                try {
+                    await abrirPaginaLogada();
+                }
+                catch (loginErr) {
+                    console.error("Falha ao recriar pagina/logar novamente: " + loginErr);
+                    await delay(Math.min(SCRAP_SOCKET_INTERVAL_MS, 5000));
+                }
             }
         }
     }
