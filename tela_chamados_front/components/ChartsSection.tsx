@@ -125,7 +125,7 @@ export default function ChartsSection({ data }: ChartsSectionProps) {
     ];
 
     const viaturasData: ChartItem[] = [
-        { name: 'EMPENHADAS', value: asNumber(data?.viaturasEmpenhadas), color: '#26c6da' },
+        { name: 'EMPENHADAS', value: asNumber(data?.viaturasEmpenhadas), color: '#4391EA' },
         { name: 'DISPONÍVEIS', value: asNumber(data?.viaturasAtivas), color: '#00897b' },
         { name: 'AÇÃO TEMPORÁRIA', value: asNumber(data?.viaturasAcaoTemporaria), color: '#29b6f6' }
     ];
