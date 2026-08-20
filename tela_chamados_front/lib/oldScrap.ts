@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 
 const execFileAsync = promisify(execFile);
+const LIMITE_MINUTOS_ACAO_TEMPORARIA = 60;
 
 function positiveNumber(value: string | undefined, fallback: number) {
     const parsed = Number(value);
@@ -121,15 +122,22 @@ function getMunicipioColor(municipio: string) {
 
 function isTempoAgVtrExcedido(tituloElemento: string | undefined) {
     if (!tituloElemento) return false;
-    const regexHorarioRecebido = /\d{2}:\d{2}/;
-    const match = tituloElemento.match(regexHorarioRecebido);
-    if (!match) return false;
-
     const now = new Date();
-    const currentTime = now.getHours().toString().padStart(2, '0') + now.getMinutes().toString().padStart(2, '0');
-    const receivedTime = match[0].replace(':', '');
+    const dataHoraRecebida = tituloElemento.match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})(?::(\d{2}))?/);
+    let dataAcaoTemporaria: Date;
 
-    return parseInt(currentTime, 10) - parseInt(receivedTime, 10) >= 100;
+    if (dataHoraRecebida) {
+        const [, dia, mes, ano, hora, minuto, segundo = '00'] = dataHoraRecebida;
+        dataAcaoTemporaria = new Date(Number(ano), Number(mes) - 1, Number(dia), Number(hora), Number(minuto), Number(segundo));
+    } else {
+        const match = tituloElemento.match(/\d{2}:\d{2}/);
+        if (!match) return false;
+
+        const [hora, minuto] = match[0].split(':');
+        dataAcaoTemporaria = new Date(now.getFullYear(), now.getMonth(), now.getDate(), Number(hora), Number(minuto), 0);
+    }
+
+    return (now.getTime() - dataAcaoTemporaria.getTime()) / 60000 >= LIMITE_MINUTOS_ACAO_TEMPORARIA;
 }
 
 function countOcorrencias(raw: any[] | undefined, totals: { vermelhas: number; amarelas: number; verdes: number; agReg: number; agVtr: number }, municipiosMap: Record<string, number>) {

@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { Alert, Box, Button, CircularProgress, Typography } from '@mui/material';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Box, Button, CircularProgress, MenuItem, TextField, Typography } from '@mui/material';
 
 import ChartsSection from '@/components/ChartsSection';
 import SummaryCards from '@/components/SummaryCards';
@@ -9,6 +9,15 @@ import VehiclesTable from '@/components/VehiclesTable';
 import type { ScrapData } from '@/lib/oldScrap';
 
 const pagePadding = { xs: 1, md: 2 };
+const LIMITE_MINUTOS_ACAO_TEMPORARIA = 60;
+const STORAGE_ACAO_TEMPORARIA_MANUAL = 'viaturasAcaoTemporariaManual';
+
+type AcaoTemporariaManual = {
+    id: string;
+    municipio: string;
+    nome: string;
+    iniciadoEm: number;
+};
 
 function positiveNumber(value: string | undefined, fallback: number) {
     const parsed = Number(value);
@@ -16,6 +25,55 @@ function positiveNumber(value: string | undefined, fallback: number) {
 }
 
 const SCRAP_REFRESH_MS = positiveNumber(process.env.NEXT_PUBLIC_SCRAP_REFRESH_MS, 30000);
+
+function removeAccents(text: string | undefined) {
+    if (!text) return '';
+    return text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+}
+
+function cloneScrapData(data: ScrapData): ScrapData {
+    return {
+        ...data,
+        municipios: (data.municipios ?? []).map((municipio) => ({ ...municipio }))
+    };
+}
+
+function aplicarAcoesTemporariasManuais(data: ScrapData, acoes: AcaoTemporariaManual[], agora: number): ScrapData {
+    const resultado = cloneScrapData(data);
+
+    for (const acao of acoes) {
+        const municipioNormalizado = removeAccents(acao.municipio).toUpperCase();
+        let municipio = resultado.municipios.find((linha) => removeAccents(linha.municipio).toUpperCase() === municipioNormalizado);
+
+        if (!municipio) {
+            municipio = {
+                municipio: acao.municipio,
+                disponiveis: 0,
+                empenhadas: 0,
+                acaoTemporaria: 0,
+                baixada: 0,
+                totalAgrVtr: 0,
+                tempoAgVtrExcedido: false
+            };
+            resultado.municipios.push(municipio);
+        }
+
+        municipio.acaoTemporaria += 1;
+        resultado.viaturasAcaoTemporaria += 1;
+        resultado.totalViaturas += 1;
+
+        const nome = acao.nome.toUpperCase();
+        if (nome.includes('USB')) resultado.total_USB += 1;
+        if (nome.includes('USA')) resultado.total_USA += 1;
+
+        const minutos = (agora - acao.iniciadoEm) / 60000;
+        if (minutos >= LIMITE_MINUTOS_ACAO_TEMPORARIA) {
+            municipio.tempoAgVtrExcedido = true;
+        }
+    }
+
+    return resultado;
+}
 
 async function tocarAlertaAVC() {
     const AudioContextClass = window.AudioContext ||
@@ -106,6 +164,10 @@ export default function ScrapDashboard() {
     const [requestActive, setRequestActive] = useState(false);
     const [avcAlertVisible, setAvcAlertVisible] = useState(false);
     const [novosAvcDetalhes, setNovosAvcDetalhes] = useState<Array<{ cidade: string; chamado: string; paciente: string }>>([]);
+    const [acoesTemporariasManuais, setAcoesTemporariasManuais] = useState<AcaoTemporariaManual[]>([]);
+    const [municipioAcaoTemporaria, setMunicipioAcaoTemporaria] = useState('');
+    const [viaturaAcaoTemporaria, setViaturaAcaoTemporaria] = useState('');
+    const [agoraAcaoTemporaria, setAgoraAcaoTemporaria] = useState(Date.now());
 
     // Novo estado para controlar se o som foi clicado/ativado ao menos uma vez desde o reload
     const [somIniciado, setSomIniciado] = useState(false);
@@ -114,6 +176,19 @@ export default function ScrapDashboard() {
     const avcAlertTimeoutRef = useRef<number | null>(null);
     const seenAvcIds = useRef<Set<string>>(new Set());
     const isFirstLoad = useRef(true);
+    const manualStorageHydrated = useRef(false);
+    const displayData = useMemo(() => {
+        if (!data) return null;
+        return aplicarAcoesTemporariasManuais(data, acoesTemporariasManuais, agoraAcaoTemporaria);
+    }, [data, acoesTemporariasManuais, agoraAcaoTemporaria]);
+    const municipiosAcaoTemporaria = useMemo(() => {
+        const nomes = [
+            ...(data?.municipios ?? []).map((municipio) => municipio.municipio),
+            ...acoesTemporariasManuais.map((acao) => acao.municipio)
+        ].filter(Boolean);
+
+        return Array.from(new Set(nomes)).sort();
+    }, [data, acoesTemporariasManuais]);
 
     async function dispararAlertaAVC() {
         setSomIniciado(true);
@@ -122,6 +197,28 @@ export default function ScrapDashboard() {
         } catch {
             setAudioBlocked(true);
         }
+    }
+
+    function adicionarAcaoTemporariaManual() {
+        const municipio = municipioAcaoTemporaria.trim();
+        const nome = viaturaAcaoTemporaria.trim();
+
+        if (!municipio || !nome) return;
+
+        setAcoesTemporariasManuais((atuais) => [
+            ...atuais,
+            {
+                id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+                municipio,
+                nome,
+                iniciadoEm: Date.now()
+            }
+        ]);
+        setViaturaAcaoTemporaria('');
+    }
+
+    function removerAcaoTemporariaManual(id: string) {
+        setAcoesTemporariasManuais((atuais) => atuais.filter((acao) => acao.id !== id));
     }
 
     // Função para testar manualmente o alerta
@@ -138,6 +235,35 @@ export default function ScrapDashboard() {
 
         void dispararAlertaAVC();
     }
+
+    useEffect(() => {
+        try {
+            const saved = window.localStorage.getItem(STORAGE_ACAO_TEMPORARIA_MANUAL);
+            if (saved) {
+                setAcoesTemporariasManuais(JSON.parse(saved));
+            }
+        } catch {
+            setAcoesTemporariasManuais([]);
+        } finally {
+            manualStorageHydrated.current = true;
+        }
+    }, []);
+
+    useEffect(() => {
+        if (!manualStorageHydrated.current) return;
+        window.localStorage.setItem(STORAGE_ACAO_TEMPORARIA_MANUAL, JSON.stringify(acoesTemporariasManuais));
+    }, [acoesTemporariasManuais]);
+
+    useEffect(() => {
+        if (!municipioAcaoTemporaria && municipiosAcaoTemporaria.length > 0) {
+            setMunicipioAcaoTemporaria(municipiosAcaoTemporaria[0]);
+        }
+    }, [municipioAcaoTemporaria, municipiosAcaoTemporaria]);
+
+    useEffect(() => {
+        const intervalId = window.setInterval(() => setAgoraAcaoTemporaria(Date.now()), 5000);
+        return () => window.clearInterval(intervalId);
+    }, []);
 
     useEffect(() => {
         let isMounted = true;
@@ -213,6 +339,8 @@ export default function ScrapDashboard() {
     if (loading && !data) return <Box sx={{ minHeight: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center' }}><CircularProgress /></Box>;
     if (error && !data) return <Box sx={{ p: 2 }}><Alert severity="error">{error}</Alert></Box>;
     if (!data) return <Typography sx={{ p: 2 }}>Nenhum dado disponível.</Typography>;
+
+    const dashboardData = displayData ?? data;
 
     return (
         <Box sx={{ bgcolor: 'white', minHeight: '100vh', width: '100%', display: 'flex', flexDirection: 'column', overflowX: 'hidden', overflowY: 'auto' }}>
@@ -334,9 +462,12 @@ export default function ScrapDashboard() {
             )}
 
             {error && <Alert severity="warning" sx={{ borderRadius: 0, py: 0 }}>Não foi possível atualizar os dados: {error}</Alert>}
-            <Box sx={{ pt: 1, pb: 1, borderBottom: '1px solid #ccc', flexShrink: 0 }}><SummaryCards data={data} /></Box>
-            <Box sx={{ width: '100%', px: pagePadding, py: 1, flexShrink: 0 }}><ChartsSection data={data} /></Box>
-            <Box sx={{ width: '100%', px: pagePadding, pb: 1, flexShrink: 0 }}><VehiclesTable data={data.municipios ?? []} totalViaturas={data.totalViaturas} /></Box>
+            <Box sx={{ pt: 1, pb: 1, borderBottom: '1px solid #ccc', flexShrink: 0 }}><SummaryCards data={dashboardData} /></Box>
+            <Box sx={{ width: '100%', px: pagePadding, py: 1, flexShrink: 0 }}><ChartsSection data={dashboardData} /></Box>
+            <Box sx={{ width: '100%', px: pagePadding, pb: 1, flexShrink: 0 }}>
+
+                <VehiclesTable data={dashboardData.municipios ?? []} totalViaturas={dashboardData.totalViaturas} />
+            </Box>
         </Box>
     );
 }
