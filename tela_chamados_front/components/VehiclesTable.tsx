@@ -16,7 +16,7 @@ type Municipio = {
     acaoTemporaria: number;
     baixada: number;
     totalAgrVtr: number;
-    tempoAgVtrExcedido?: boolean;
+    tempoAcaoTemporariaExcedido?: boolean;
 };
 
 type VehiclesTableProps = {
@@ -122,7 +122,7 @@ function renderTable(tableData: Municipio[]) {
                             align="center"
                             sx={{
                                 ...cellStyle,
-                                ...(row.tempoAgVtrExcedido
+                                ...(row.tempoAcaoTemporariaExcedido
                                     ? {
                                         animation: 'piscarAcaoTemporaria 1s infinite',
                                         '@keyframes piscarAcaoTemporaria': {
