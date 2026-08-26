@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 
 const execFileAsync = promisify(execFile);
+const LIMITE_MINUTOS_ACAO_TEMPORARIA = 60;
 
 function positiveNumber(value: string | undefined, fallback: number) {
     const parsed = Number(value);
@@ -50,6 +51,15 @@ type MunicipioRow = {
     color?: string;
 };
 
+type DebugAcaoTemporariaItem = {
+    municipio: string;
+    viatura: string;
+    tituloElemento: string | null;
+    dataInterpretada: string | null;
+    diferencaMinutos: number | null;
+    excedido: boolean;
+};
+
 export type ScrapData = {
     totalOcorrencias: number;
     ocorrenciasVermelhas: number;
@@ -74,6 +84,11 @@ export type ScrapData = {
     RelatorioPacientesCriticos?: any[];
     RelatorioOcorrenciasTransferidas?: any[];
     casosAVC: any[];
+    debugAcaoTemporaria?: {
+        atualizadoEm: string;
+        limiteMinutos: number;
+        itens: DebugAcaoTemporariaItem[];
+    };
 };
 
 const CITY_COLOR_MAP: Record<string, string> = {
@@ -120,6 +135,51 @@ function getMunicipioColor(municipio: string) {
     return CITY_COLOR_MAP[municipio];
 }
 
+function extrairDataAcaoTemporaria(tituloElemento: string | undefined) {
+    if (!tituloElemento) return null;
+
+    const agora = new Date();
+    const primeiraLinha = tituloElemento.split(/\r?\n/, 1)[0] ?? '';
+    const horaAcaoTemporaria = primeiraLinha.match(/Ação Temporária.*?(\d{2}:\d{2})(?!.*\d{2}:\d{2})/i);
+
+    if (horaAcaoTemporaria) {
+        const [hora, minuto] = horaAcaoTemporaria[1].split(':');
+        return new Date(
+            agora.getFullYear(),
+            agora.getMonth(),
+            agora.getDate(),
+            Number(hora),
+            Number(minuto),
+            0
+        );
+    }
+
+    const dataHoraCompleta = tituloElemento.match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})(?::(\d{2}))?/);
+
+    if (dataHoraCompleta) {
+        const [, dia, mes, ano, hora, minuto, segundo = '00'] = dataHoraCompleta;
+        return new Date(Number(ano), Number(mes) - 1, Number(dia), Number(hora), Number(minuto), Number(segundo));
+    }
+
+    const horaMinuto = tituloElemento.match(/\d{2}:\d{2}/);
+    if (!horaMinuto) return null;
+
+    const [hora, minuto] = horaMinuto[0].split(':');
+    return new Date(
+            agora.getFullYear(),
+            agora.getMonth(),
+            agora.getDate(),
+            Number(hora),
+            Number(minuto),
+            0
+    );
+}
+
+function isTempoAcaoTemporariaExcedido(dataAcaoTemporaria: Date | null) {
+    if (!dataAcaoTemporaria) return false;
+    return (Date.now() - dataAcaoTemporaria.getTime()) / 60000 >= LIMITE_MINUTOS_ACAO_TEMPORARIA;
+}
+
 function countOcorrencias(raw: any[] | undefined, totals: { vermelhas: number; amarelas: number; verdes: number; agReg: number; agVtr: number }, municipiosMap: Record<string, number>) {
     if (!Array.isArray(raw)) return totals;
 
@@ -161,12 +221,15 @@ function normalizeMunicipios(rawViaturas: any[] | undefined, rawData: RawScrapRe
             const acaoTemporaria = linha?.EstatisticaGeral?.TotalviaturasAcaoTemporaria ?? 0;
             const baixada = linha?.EstatisticaGeral?.TotalviaturasBaixadas ?? 0;
             const totalAgrVtr = countAgVtrForMunicipio(rawData, municipio);
-            const acaoTemporariaViaturas = Array.isArray(linha.viaturas)
-                ? linha.viaturas
-                    .filter((obj: any) => obj?.status === 'Ação temporária')
-                    .map((obj: any) => String(obj?.nome || '').trim())
-                    .filter(Boolean)
+            const viaturasAcaoTemporaria = Array.isArray(linha.viaturas)
+                ? linha.viaturas.filter((obj: any) => obj?.status === 'Ação temporária')
                 : [];
+            const acaoTemporariaViaturas = viaturasAcaoTemporaria
+                .map((obj: any) => String(obj?.nome || '').trim())
+                .filter(Boolean);
+            const tempoAgVtrExcedido = viaturasAcaoTemporaria.some((obj: any) =>
+                isTempoAcaoTemporariaExcedido(extrairDataAcaoTemporaria(obj?.tituloElemento))
+            );
             const color = getMunicipioColor(municipio);
 
             return {
@@ -177,10 +240,49 @@ function normalizeMunicipios(rawViaturas: any[] | undefined, rawData: RawScrapRe
                 acaoTemporariaViaturas,
                 baixada,
                 totalAgrVtr,
-                tempoAgVtrExcedido: false,
+                tempoAgVtrExcedido,
                 color,
             };
         });
+}
+
+function buildDebugAcaoTemporaria(rawViaturas: any[] | undefined) {
+    if (!Array.isArray(rawViaturas)) {
+        return {
+            atualizadoEm: new Date().toISOString(),
+            limiteMinutos: LIMITE_MINUTOS_ACAO_TEMPORARIA,
+            itens: [] as DebugAcaoTemporariaItem[],
+        };
+    }
+
+    const itens = rawViaturas
+        .filter((linha) => linha?.municipio && linha.municipio !== 'EQUIPE CERTIFICADORA DE ÓBITO' && linha.municipio !== 'FROTA PRÓPRIA UNIDADE')
+        .flatMap((linha) => {
+            const municipio = normalizeMunicipioName(String(linha.municipio));
+            const viaturasAcaoTemporaria = Array.isArray(linha.viaturas)
+                ? linha.viaturas.filter((obj: any) => obj?.status === 'Ação temporária')
+                : [];
+
+            return viaturasAcaoTemporaria.map((obj: any) => {
+                const dataAcaoTemporaria = extrairDataAcaoTemporaria(obj?.tituloElemento);
+                return {
+                    municipio,
+                    viatura: String(obj?.nome || '').trim(),
+                    tituloElemento: obj?.tituloElemento ?? null,
+                    dataInterpretada: dataAcaoTemporaria?.toISOString() ?? null,
+                    diferencaMinutos: dataAcaoTemporaria
+                        ? Math.floor((Date.now() - dataAcaoTemporaria.getTime()) / 60000)
+                        : null,
+                    excedido: isTempoAcaoTemporariaExcedido(dataAcaoTemporaria),
+                };
+            });
+        });
+
+    return {
+        atualizadoEm: new Date().toISOString(),
+        limiteMinutos: LIMITE_MINUTOS_ACAO_TEMPORARIA,
+        itens,
+    };
 }
 
 function countAgVtrForMunicipio(raw: RawScrapRelatorio, municipio: string) {
@@ -271,8 +373,7 @@ function transformScrapData(raw: RawScrapRelatorio): ScrapData {
 
     const viaturasTotals = countViaturasTotals(raw.RelatorioViaturas);
     const municipios = normalizeMunicipios(raw.RelatorioViaturas, raw);
-
-
+    const debugAcaoTemporaria = buildDebugAcaoTemporaria(raw.RelatorioViaturas);
 
     const municipiosAguardando = Object.keys(municipiosAguardandoMap).map((cidade) => ({
         name: cidade,
@@ -300,6 +401,7 @@ function transformScrapData(raw: RawScrapRelatorio): ScrapData {
         municipios,
         municipiosAguardando,
         casosAVC,
+        debugAcaoTemporaria,
     };
 }
 
