@@ -135,6 +135,12 @@ function getMunicipioColor(municipio: string) {
     return CITY_COLOR_MAP[municipio];
 }
 
+function hasCnes(viatura: any) {
+    const nome = String(viatura?.nome || '');
+    const cnes = String(viatura?.cnes || viatura?.CNES || '');
+    return /\bCNES\b/i.test(nome) || cnes.trim().length > 0;
+}
+
 function extrairDataAcaoTemporaria(tituloElemento: string | undefined) {
     if (!tituloElemento) return null;
 
@@ -216,14 +222,13 @@ function normalizeMunicipios(rawViaturas: any[] | undefined, rawData: RawScrapRe
         .filter((linha) => linha?.municipio && linha.municipio !== 'EQUIPE CERTIFICADORA DE ÓBITO' && linha.municipio !== 'FROTA PRÓPRIA UNIDADE')
         .map((linha) => {
             const municipio = normalizeMunicipioName(String(linha.municipio));
+            const viaturas = Array.isArray(linha.viaturas) ? linha.viaturas : [];
             const disponiveis = linha?.EstatisticaGeral?.TotalviaturasAtivas ?? 0;
             const empenhadas = linha?.EstatisticaGeral?.TotalviaturasEmpenhadas ?? 0;
             const acaoTemporaria = linha?.EstatisticaGeral?.TotalviaturasAcaoTemporaria ?? 0;
-            const baixada = linha?.EstatisticaGeral?.TotalviaturasBaixadas ?? 0;
+            const baixada = viaturas.filter((obj: any) => obj?.status === 'Baixada' && hasCnes(obj)).length;
             const totalAgrVtr = countAgVtrForMunicipio(rawData, municipio);
-            const viaturasAcaoTemporaria = Array.isArray(linha.viaturas)
-                ? linha.viaturas.filter((obj: any) => obj?.status === 'Ação temporária')
-                : [];
+            const viaturasAcaoTemporaria = viaturas.filter((obj: any) => obj?.status === 'Ação temporária');
             const acaoTemporariaViaturas = viaturasAcaoTemporaria
                 .map((obj: any) => String(obj?.nome || '').trim())
                 .filter(Boolean);
@@ -327,7 +332,7 @@ function countViaturasTotals(rawViaturas: any[] | undefined) {
         const estatistica = linha?.EstatisticaGeral || {};
         const viaturas = Array.isArray(linha.viaturas) ? linha.viaturas : [];
 
-        const baixadas = estatistica.TotalviaturasBaixadas ?? 0;
+        const baixadas = viaturas.filter((viatura: any) => viatura?.status === 'Baixada' && hasCnes(viatura)).length;
         const empenhadas = estatistica.TotalviaturasEmpenhadas ?? 0;
         const ativas = estatistica.TotalviaturasAtivas ?? 0;
         const acaoTemporaria = estatistica.TotalviaturasAcaoTemporaria ?? 0;
