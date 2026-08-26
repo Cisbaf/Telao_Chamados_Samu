@@ -9,6 +9,8 @@ import VehiclesTable from '@/components/VehiclesTable';
 import type { ScrapData } from '@/lib/oldScrap';
 
 const pagePadding = { xs: 1, md: 2 };
+const STORAGE_ACAO_TEMPORARIA_INICIO = 'acaoTemporariaInicioPorViatura';
+const LIMITE_ACAO_TEMPORARIA_MS = 60 * 60 * 1000;
 
 function positiveNumber(value: string | undefined, fallback: number) {
     const parsed = Number(value);
@@ -16,6 +18,61 @@ function positiveNumber(value: string | undefined, fallback: number) {
 }
 
 const SCRAP_REFRESH_MS = positiveNumber(process.env.NEXT_PUBLIC_SCRAP_REFRESH_MS, 30000);
+
+function normalizarChaveAcaoTemporaria(municipio: string, viatura: string) {
+    return `${municipio.trim().toUpperCase()}::${viatura.trim().toUpperCase()}`;
+}
+
+function lerIniciosAcaoTemporaria() {
+    try {
+        const saved = window.localStorage.getItem(STORAGE_ACAO_TEMPORARIA_INICIO);
+        if (!saved) return {};
+
+        const parsed = JSON.parse(saved) as Record<string, unknown>;
+        return Object.fromEntries(
+            Object.entries(parsed).filter(([, value]) => typeof value === 'number' && Number.isFinite(value))
+        ) as Record<string, number>;
+    } catch {
+        return {};
+    }
+}
+
+function aplicarTempoAcaoTemporaria(scrapData: ScrapData) {
+    const agora = Date.now();
+    const iniciosSalvos = lerIniciosAcaoTemporaria();
+    const proximosInicios: Record<string, number> = {};
+
+    const municipios = (scrapData.municipios ?? []).map((municipio) => {
+        const viaturas = municipio.acaoTemporariaViaturas ?? [];
+        let tempoAgVtrExcedido = false;
+
+        for (const viatura of viaturas) {
+            const chave = normalizarChaveAcaoTemporaria(municipio.municipio, viatura);
+            const inicio = iniciosSalvos[chave] ?? agora;
+            proximosInicios[chave] = inicio;
+
+            if (agora - inicio >= LIMITE_ACAO_TEMPORARIA_MS) {
+                tempoAgVtrExcedido = true;
+            }
+        }
+
+        return {
+            ...municipio,
+            tempoAgVtrExcedido,
+        };
+    });
+
+    try {
+        window.localStorage.setItem(STORAGE_ACAO_TEMPORARIA_INICIO, JSON.stringify(proximosInicios));
+    } catch {
+        // O alerta continua funcionando no próximo refresh quando o navegador permitir armazenamento local.
+    }
+
+    return {
+        ...scrapData,
+        municipios,
+    };
+}
 
 async function tocarAlertaAVC() {
     const AudioContextClass = window.AudioContext ||
@@ -153,7 +210,7 @@ export default function ScrapDashboard() {
                 const response = await fetch('/api/scrap', { cache: 'no-store', signal: abortController.signal });
                 if (!response.ok) throw new Error(`Erro ${response.status}: ${response.statusText}`);
 
-                const json: ScrapData = await response.json();
+                const json: ScrapData = aplicarTempoAcaoTemporaria(await response.json());
                 if (!isMounted) return;
 
                 const listaAvc = json.casosAVC ?? [];

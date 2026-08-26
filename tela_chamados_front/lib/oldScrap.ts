@@ -3,7 +3,6 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 
 const execFileAsync = promisify(execFile);
-const LIMITE_MINUTOS_ACAO_TEMPORARIA = 60;
 
 function positiveNumber(value: string | undefined, fallback: number) {
     const parsed = Number(value);
@@ -47,7 +46,7 @@ type MunicipioRow = {
     acaoTemporariaViaturas: string[];
     baixada: number;
     totalAgrVtr: number;
-    tempoAcaoTemporariaExcedido: boolean;
+    tempoAgVtrExcedido: boolean;
     color?: string;
 };
 
@@ -121,26 +120,6 @@ function getMunicipioColor(municipio: string) {
     return CITY_COLOR_MAP[municipio];
 }
 
-function isTempoAcaoTemporariaExcedido(tituloElemento: string | undefined) {
-    if (!tituloElemento) return false;
-    const now = new Date();
-    const dataHoraRecebida = tituloElemento.match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})(?::(\d{2}))?/);
-    let dataAcaoTemporaria: Date;
-
-    if (dataHoraRecebida) {
-        const [, dia, mes, ano, hora, minuto, segundo = '00'] = dataHoraRecebida;
-        dataAcaoTemporaria = new Date(Number(ano), Number(mes) - 1, Number(dia), Number(hora), Number(minuto), Number(segundo));
-    } else {
-        const match = tituloElemento.match(/\d{2}:\d{2}/);
-        if (!match) return false;
-
-        const [hora, minuto] = match[0].split(':');
-        dataAcaoTemporaria = new Date(now.getFullYear(), now.getMonth(), now.getDate(), Number(hora), Number(minuto), 0);
-    }
-
-    return (now.getTime() - dataAcaoTemporaria.getTime()) / 60000 >= LIMITE_MINUTOS_ACAO_TEMPORARIA;
-}
-
 function countOcorrencias(raw: any[] | undefined, totals: { vermelhas: number; amarelas: number; verdes: number; agReg: number; agVtr: number }, municipiosMap: Record<string, number>) {
     if (!Array.isArray(raw)) return totals;
 
@@ -188,9 +167,6 @@ function normalizeMunicipios(rawViaturas: any[] | undefined, rawData: RawScrapRe
                     .map((obj: any) => String(obj?.nome || '').trim())
                     .filter(Boolean)
                 : [];
-            const tempoAcaoTemporariaExcedido = Array.isArray(linha.viaturas)
-                ? linha.viaturas.some((obj: any) => obj?.status === 'Ação temporária' && isTempoAcaoTemporariaExcedido(obj?.tituloElemento))
-                : false;
             const color = getMunicipioColor(municipio);
 
             return {
@@ -201,7 +177,7 @@ function normalizeMunicipios(rawViaturas: any[] | undefined, rawData: RawScrapRe
                 acaoTemporariaViaturas,
                 baixada,
                 totalAgrVtr,
-                tempoAcaoTemporariaExcedido,
+                tempoAgVtrExcedido: false,
                 color,
             };
         });
